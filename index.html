@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>₽/м² — сканер цены за квадратный метр</title>
+<style>
+  :root{
+    --bg:#0a0f1a;
+    --surface:#121a2b;
+    --surface-2:#1b2638;
+    --line:#233047;
+    --teal:#17a9b0;
+    --teal-bright:#3fd1d8;
+    --amber:#f2a93b;
+    --text:#e7ecf3;
+    --muted:#7c8aa0;
+    --danger:#e0524f;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+  body{
+    min-height:100vh;
+    padding-bottom:40px;
+  }
+  .app{max-width:560px;margin:0 auto;}
+
+  header{
+    padding:18px 16px 10px;
+    display:flex;align-items:baseline;gap:10px;
+    border-bottom:1px solid var(--line);
+  }
+  header h1{font-size:17px;margin:0;font-weight:700;letter-spacing:.2px;}
+  header .tag{
+    font-family:var(--mono);font-size:11px;color:var(--teal-bright);
+    background:rgba(23,169,176,.12);padding:3px 7px;border-radius:4px;
+    border:1px solid rgba(23,169,176,.35);
+  }
+
+  .modes{display:flex;gap:8px;padding:14px 16px 0;}
+  .mode-btn{
+    flex:1;padding:9px 0;border-radius:8px;border:1px solid var(--line);
+    background:var(--surface);color:var(--muted);font-size:13px;font-weight:600;
+    cursor:pointer;transition:border-color .15s, color .15s;
+  }
+  .mode-btn.active{color:var(--teal-bright);border-color:var(--teal);background:rgba(23,169,176,.08);}
+  .mode-btn:focus-visible{outline:2px solid var(--teal-bright);outline-offset:2px;}
+
+  .viewfinder{
+    position:relative;margin:14px 16px 0;border-radius:14px;overflow:hidden;
+    background:#000;aspect-ratio:4/3;
+    border:1px solid var(--line);
+  }
+  video, .preview-img{width:100%;height:100%;object-fit:cover;display:block;}
+  .frame-overlay{position:absolute;inset:0;pointer-events:none;}
+  .corner{position:absolute;width:26px;height:26px;border:3px solid var(--teal-bright);opacity:.85;}
+  .corner.tl{top:14px;left:14px;border-right:none;border-bottom:none;border-radius:4px 0 0 0;}
+  .corner.tr{top:14px;right:14px;border-left:none;border-bottom:none;border-radius:0 4px 0 0;}
+  .corner.bl{bottom:14px;left:14px;border-right:none;border-top:none;border-radius:0 0 0 4px;}
+  .corner.br{bottom:14px;right:14px;border-left:none;border-top:none;border-radius:0 0 4px 0;}
+
+  .scanline{
+    position:absolute;left:8%;right:8%;height:2px;
+    background:linear-gradient(90deg, transparent, var(--teal-bright), transparent);
+    top:14px; opacity:0; box-shadow:0 0 8px var(--teal-bright);
+  }
+  .scanning .scanline{animation:sweep 1.4s ease-in-out infinite;opacity:1;}
+  @keyframes sweep{
+    0%{top:14px;opacity:0;}
+    10%{opacity:1;}
+    90%{opacity:1;}
+    100%{top:calc(100% - 16px);opacity:0;}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .scanning .scanline{animation:none;opacity:.6;top:50%;}
+  }
+
+  .vf-empty{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--muted);font-size:13px;text-align:center;padding:0 30px;
+  }
+
+  .controls{display:flex;justify-content:center;align-items:center;gap:18px;padding:16px 16px 4px;}
+  .shutter{
+    width:64px;height:64px;border-radius:50%;border:3px solid var(--teal-bright);
+    background:radial-gradient(circle at 35% 30%, #1f3a44, var(--surface-2));
+    cursor:pointer;position:relative;
+  }
+  .shutter::after{
+    content:"";position:absolute;inset:9px;border-radius:50%;background:var(--teal-bright);opacity:.9;
+  }
+  .shutter:disabled{opacity:.4;cursor:not-allowed;}
+  .shutter:focus-visible{outline:2px solid var(--teal-bright);outline-offset:3px;}
+  .ghost-btn{
+    border:1px solid var(--line);background:transparent;color:var(--muted);
+    padding:9px 14px;border-radius:8px;font-size:13px;cursor:pointer;
+  }
+  .ghost-btn:focus-visible{outline:2px solid var(--teal-bright);outline-offset:2px;}
+  input[type="file"]{display:none;}
+
+  .status-line{
+    text-align:center;font-size:12.5px;color:var(--muted);padding:6px 16px 0;min-height:18px;
+  }
+  .status-line.err{color:var(--danger);}
+
+  .card{
+    margin:16px 16px 0;background:var(--surface);border:1px solid var(--line);
+    border-radius:14px;padding:16px;
+  }
+
+  .result-label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+  .result-value{
+    font-family:var(--mono);font-size:38px;font-weight:700;color:var(--amber);
+    margin:4px 0 2px;letter-spacing:.2px;
+    transition:opacity .2s;
+  }
+  .result-value.flash{animation:flash .4s ease;}
+  @keyframes flash{ from{opacity:.25;} to{opacity:1;} }
+  @media (prefers-reduced-motion: reduce){ .result-value.flash{animation:none;} }
+  .result-sub{font-size:12px;color:var(--muted);}
+
+  .fields{display:flex;gap:10px;margin-top:14px;}
+  .field{flex:1;}
+  .field label{font-size:11px;color:var(--muted);display:block;margin-bottom:5px;}
+  .field input{
+    width:100%;background:var(--surface-2);border:1px solid var(--line);color:var(--text);
+    font-family:var(--mono);font-size:15px;padding:9px 10px;border-radius:8px;
+  }
+  .field input:focus-visible{outline:2px solid var(--teal-bright);outline-offset:1px;}
+
+  .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;}
+  .chip{
+    font-family:var(--mono);font-size:11.5px;background:var(--surface-2);color:var(--teal-bright);
+    border:1px solid var(--line);border-radius:6px;padding:4px 8px;cursor:pointer;
+  }
+  .chip:focus-visible{outline:2px solid var(--teal-bright);outline-offset:1px;}
+
+  .raw-text{
+    margin-top:12px;font-family:var(--mono);font-size:11px;color:var(--muted);
+    background:var(--surface-2);border:1px solid var(--line);border-radius:8px;
+    padding:8px 10px;max-height:64px;overflow:auto;white-space:pre-wrap;word-break:break-word;
+  }
+
+  .add-row{margin-top:14px;display:flex;gap:10px;}
+  .add-row input{
+    flex:1;background:var(--surface-2);border:1px solid var(--line);color:var(--text);
+    font-size:13px;padding:9px 10px;border-radius:8px;
+  }
+  .primary-btn{
+    background:var(--teal);color:#03161a;border:none;font-weight:700;font-size:13px;
+    padding:9px 16px;border-radius:8px;cursor:pointer;white-space:nowrap;
+  }
+  .primary-btn:disabled{opacity:.4;cursor:not-allowed;}
+  .primary-btn:focus-visible{outline:2px solid var(--teal-bright);outline-offset:2px;}
+
+  .history{margin:18px 16px 0;}
+  .history h2{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center;}
+  .history h2 button{background:none;border:none;color:var(--danger);font-size:11px;cursor:pointer;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th{text-align:left;color:var(--muted);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:0 6px 6px;}
+  td{padding:9px 6px;border-top:1px solid var(--line);font-family:var(--mono);}
+  tr.best td{color:var(--amber);}
+  td.del{text-align:right;color:var(--muted);cursor:pointer;font-family:var(--sans);}
+  .empty-hist{font-size:12.5px;color:var(--muted);padding:8px 0;}
+
+  footer{margin:24px 16px 0;font-size:11.5px;color:var(--muted);line-height:1.5;border-top:1px solid var(--line);padding-top:14px;}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <h1>₽/м²</h1>
+    <span class="tag">сканер цены за метр</span>
+  </header>
+
+  <div class="modes">
+    <button class="mode-btn active" id="modeCamera" type="button">📷 Камера</button>
+    <button class="mode-btn" id="modePhoto" type="button">🖼️ Загрузить фото</button>
+  </div>
+
+  <div class="viewfinder" id="viewfinder">
+    <video id="video" autoplay playsinline muted></video>
+    <img id="previewImg" class="preview-img" style="display:none" alt="Загруженное фото">
+    <div class="frame-overlay">
+      <div class="corner tl"></div><div class="corner tr"></div>
+      <div class="corner bl"></div><div class="corner br"></div>
+      <div class="scanline"></div>
+    </div>
+    <div class="vf-empty" id="vfEmpty">Наведите камеру на площадь и цену квартиры</div>
+  </div>
+  <input type="file" id="fileInput" accept="image/*" capture="environment">
+
+  <div class="controls" id="cameraControls">
+    <button class="ghost-btn" id="switchCamBtn" type="button">⟲ Камера</button>
+    <button class="shutter" id="shutterBtn" type="button" aria-label="Сделать снимок и распознать"></button>
+    <span style="width:80px"></span>
+  </div>
+  <div class="controls" id="photoControls" style="display:none">
+    <button class="ghost-btn" id="pickPhotoBtn" type="button">Выбрать фото</button>
+  </div>
+
+  <div class="status-line" id="statusLine">Откройте доступ к камере, чтобы начать</div>
+
+  <div class="card">
+    <div class="result-label">Цена за 1 м²</div>
+    <div class="result-value" id="resultValue">—</div>
+    <div class="result-sub" id="resultSub">Распознайте площадь и цену, чтобы увидеть расчёт</div>
+
+    <div class="fields">
+      <div class="field">
+        <label for="areaInput">Площадь, м²</label>
+        <input type="text" id="areaInput" inputmode="decimal" placeholder="89.35">
+        <div class="chips" id="areaChips"></div>
+      </div>
+      <div class="field">
+        <label for="priceInput">Цена, ₽</label>
+        <input type="text" id="priceInput" inputmode="numeric" placeholder="12737736">
+        <div class="chips" id="priceChips"></div>
+      </div>
+    </div>
+
+    <div class="raw-text" id="rawText" style="display:none"></div>
+
+    <div class="add-row">
+      <input type="text" id="labelInput" placeholder="№ квартиры (необязательно)">
+      <button class="primary-btn" id="addBtn" disabled>+ В список</button>
+    </div>
+  </div>
+
+  <div class="history">
+    <h2>Сравнение <button id="clearAllBtn" type="button">очистить всё</button></h2>
+    <div id="historyBody"><div class="empty-hist">Список пуст — добавьте первую квартиру выше</div></div>
+  </div>
+
+  <footer>
+    Камера работает только на странице, открытой по HTTPS (например, после публикации на GitHub Pages) или прямо в браузере телефона — во встроенном превью чата доступ к камере обычно заблокирован, используйте режим «Загрузить фото».<br><br>
+    Расчёт основан на распознанном тексте — Tesseract.js может ошибаться, особенно на мелком шрифте. Перед сохранением в список проверьте значения в полях «Площадь» и «Цена».
+  </footer>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  const els = {
+    modeCamera: document.getElementById('modeCamera'),
+    modePhoto: document.getElementById('modePhoto'),
+    viewfinder: document.getElementById('viewfinder'),
+    video: document.getElementById('video'),
+    previewImg: document.getElementById('previewImg'),
+    vfEmpty: document.getElementById('vfEmpty'),
+    fileInput: document.getElementById('fileInput'),
+    cameraControls: document.getElementById('cameraControls'),
+    photoControls: document.getElementById('photoControls'),
+    shutterBtn: document.getElementById('shutterBtn'),
+    switchCamBtn: document.getElementById('switchCamBtn'),
+    pickPhotoBtn: document.getElementById('pickPhotoBtn'),
+    statusLine: document.getElementById('statusLine'),
+    resultValue: document.getElementById('resultValue'),
+    resultSub: document.getElementById('resultSub'),
+    areaInput: document.getElementById('areaInput'),
+    priceInput: document.getElementById('priceInput'),
+    areaChips: document.getElementById('areaChips'),
+    priceChips: document.getElementById('priceChips'),
+    rawText: document.getElementById('rawText'),
+    labelInput: document.getElementById('labelInput'),
+    addBtn: document.getElementById('addBtn'),
+    historyBody: document.getElementById('historyBody'),
+    clearAllBtn: document.getElementById('clearAllBtn'),
+  };
+
+  let stream = null;
+  let facingMode = 'environment';
+  let history = [];
+  let rowId = 0;
+
+  function setMode(mode){
+    const isCamera = mode === 'camera';
+    els.modeCamera.classList.toggle('active', isCamera);
+    els.modePhoto.classList.toggle('active', !isCamera);
+    els.cameraControls.style.display = isCamera ? 'flex' : 'none';
+    els.photoControls.style.display = isCamera ? 'none' : 'flex';
+    els.video.style.display = isCamera ? 'block' : 'none';
+    els.previewImg.style.display = isCamera ? 'none' : (els.previewImg.src ? 'block' : 'none');
+    if (isCamera){
+      startCamera();
+    } else {
+      stopCamera();
+      els.vfEmpty.style.display = els.previewImg.src ? 'none' : 'flex';
+      setStatus('Выберите фото с площадью и ценой квартиры');
+    }
+  }
+  els.modeCamera.addEventListener('click', () => setMode('camera'));
+  els.modePhoto.addEventListener('click', () => setMode('photo'));
+
+  async function startCamera(){
+    stopCamera();
+    setStatus('Запрашиваем доступ к камере…');
+    try{
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode, width:{ideal:1280}, height:{ideal:960} },
+        audio: false
+      });
+      els.video.srcObject = stream;
+      els.vfEmpty.style.display = 'none';
+      els.shutterBtn.disabled = false;
+      setStatus('Наведите камеру и нажмите кнопку съёмки');
+    }catch(err){
+      els.vfEmpty.style.display = 'flex';
+      els.vfEmpty.textContent = 'Нет доступа к камере';
+      els.shutterBtn.disabled = true;
+      setStatus('Не удалось включить камеру. Разрешите доступ в браузере или используйте «Загрузить фото».', true);
+    }
+  }
+  function stopCamera(){
+    if (stream){
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+  }
+  els.switchCamBtn.addEventListener('click', () => {
+    facingMode = facingMode === 'environment' ? 'user' : 'environment';
+    startCamera();
+  });
+
+  els.pickPhotoBtn.addEventListener('click', () => els.fileInput.click());
+  els.fileInput.addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      els.previewImg.src = ev.target.result;
+      els.previewImg.style.display = 'block';
+      els.vfEmpty.style.display = 'none';
+      runOcrOnImageSrc(ev.target.result);
+    };
+    reader.readAsDataURL(file);
+  });
+
+  els.shutterBtn.addEventListener('click', () => {
+    if (!stream) return;
+    const video = els.video;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 960;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    runOcrOnImageSrc(canvas.toDataURL('image/jpeg', 0.92));
+  });
+
+  function runOcrOnImageSrc(src){
+    els.viewfinder.classList.add('scanning');
+    setStatus('Распознаём текст…');
+    els.shutterBtn.disabled = true;
+    els.pickPhotoBtn.disabled = true;
+
+    Tesseract.recognize(src, 'eng', {})
+      .then(({ data: { text } }) => {
+        handleOcrText(text || '');
+      })
+      .catch(() => {
+        setStatus('Не получилось распознать фото. Попробуйте снять ровнее и ближе к тексту.', true);
+      })
+      .finally(() => {
+        els.viewfinder.classList.remove('scanning');
+        els.shutterBtn.disabled = !stream;
+        els.pickPhotoBtn.disabled = false;
+      });
+  }
+
+  function handleOcrText(text){
+    els.rawText.style.display = 'block';
+    els.rawText.textContent = text.trim() || '(пусто)';
+
+    const areaMatches = uniq([...text.matchAll(/(\d{1,3}[.,]\d{1,2})\s*(?:кв\.?\s*)?[мМmM]/gi)].map(m => m[1].replace(',', '.')));
+    let priceMatches = uniq([...text.matchAll(/(\d[\d\s.,]{4,14}\d)\s*(?:₽|руб|[PpБb]\b)/gi)].map(m => m[1].replace(/[\s.,]/g, '')));
+
+    if (priceMatches.length === 0){
+      const fallback = uniq([...text.matchAll(/\b(\d[\d\s]{5,13}\d)\b/g)]
+        .map(m => m[1].replace(/\s/g, ''))
+        .filter(v => v.length >= 6 && v.length <= 9));
+      priceMatches = fallback;
+    }
+
+    if (areaMatches.length === 0 && priceMatches.length === 0){
+      setStatus('Не нашли ни площадь, ни цену на фото. Попробуйте снять крупнее.', true);
+    } else {
+      setStatus('Готово — проверьте значения ниже');
+    }
+
+    renderChips(els.areaChips, areaMatches, els.areaInput);
+    renderChips(els.priceChips, priceMatches, els.priceInput);
+
+    if (areaMatches.length) els.areaInput.value = areaMatches[0];
+    if (priceMatches.length) els.priceInput.value = priceMatches[0];
+
+    const numMatch = text.match(/№\s?(\d{1,4})/);
+    if (numMatch && !els.labelInput.value){
+      els.labelInput.value = numMatch[1];
+    }
+
+    recompute();
+  }
+
+  function uniq(arr){ return [...new Set(arr)]; }
+
+  function renderChips(container, values, targetInput){
+    container.innerHTML = '';
+    values.slice(0, 4).forEach(v => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'chip';
+      chip.textContent = v;
+      chip.addEventListener('click', () => { targetInput.value = v; recompute(); });
+      container.appendChild(chip);
+    });
+  }
+
+  function recompute(){
+    const area = parseFloat((els.areaInput.value || '').replace(',', '.'));
+    const price = parseFloat((els.priceInput.value || '').replace(/\s/g, ''));
+    const valid = area > 0 && price > 0;
+    els.addBtn.disabled = !valid;
+    if (!valid){
+      els.resultValue.textContent = '—';
+      els.resultSub.textContent = 'Распознайте площадь и цену, чтобы увидеть расчёт';
+      return;
+    }
+    const perM2 = Math.round(price / area);
+    els.resultValue.textContent = formatRub(perM2) + ' /м²';
+    els.resultValue.classList.remove('flash');
+    requestAnimationFrame(() => els.resultValue.classList.add('flash'));
+    els.resultSub.textContent = formatRub(price) + ' ₽  ÷  ' + area.toFixed(2) + ' м²';
+  }
+  els.areaInput.addEventListener('input', recompute);
+  els.priceInput.addEventListener('input', recompute);
+
+  function formatRub(n){
+    return Math.round(n).toLocaleString('ru-RU');
+  }
+
+  els.addBtn.addEventListener('click', () => {
+    const area = parseFloat((els.areaInput.value || '').replace(',', '.'));
+    const price = parseFloat((els.priceInput.value || '').replace(/\s/g, ''));
+    if (!(area > 0 && price > 0)) return;
+    const perM2 = Math.round(price / area);
+    history.push({
+      id: ++rowId,
+      label: els.labelInput.value.trim() || '—',
+      area, price, perM2
+    });
+    els.labelInput.value = '';
+    renderHistory();
+  });
+
+  els.clearAllBtn.addEventListener('click', () => {
+    history = [];
+    renderHistory();
+  });
+
+  function renderHistory(){
+    if (history.length === 0){
+      els.historyBody.innerHTML = '<div class="empty-hist">Список пуст — добавьте первую квартиру выше</div>';
+      return;
+    }
+    const sorted = [...history].sort((a,b) => a.perM2 - b.perM2);
+    const bestId = sorted[0].id;
+    let rows = sorted.map(r => `
+      <tr class="${r.id === bestId ? 'best' : ''}">
+        <td>${escapeHtml(r.label)}</td>
+        <td>${r.area.toFixed(2)}</td>
+        <td>${formatRub(r.price)}</td>
+        <td>${formatRub(r.perM2)}</td>
+        <td class="del" data-id="${r.id}">✕</td>
+      </tr>`).join('');
+    els.historyBody.innerHTML = `
+      <table>
+        <thead><tr><th>№</th><th>м²</th><th>цена</th><th>₽/м²</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    els.historyBody.querySelectorAll('.del').forEach(cell => {
+      cell.addEventListener('click', () => {
+        const id = parseInt(cell.dataset.id, 10);
+        history = history.filter(r => r.id !== id);
+        renderHistory();
+      });
+    });
+  }
+
+  function escapeHtml(s){
+    return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  function setStatus(msg, isError){
+    els.statusLine.textContent = msg;
+    els.statusLine.classList.toggle('err', !!isError);
+  }
+
+  startCamera();
+})();
+</script>
+</body>
+</html>
