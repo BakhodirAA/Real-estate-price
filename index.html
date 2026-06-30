@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>₽/м² — сканер</title>
+<style>
+:root{
+  --bg:#0a0f1a; --surface:#121a2b; --surface2:#1b2638; --line:#233047;
+  --teal:#17a9b0; --teal-b:#3fd1d8; --amber:#f2a93b;
+  --text:#e7ecf3; --muted:#7c8aa0; --danger:#e0524f;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+}
+*{box-sizing:border-box;} html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+body{min-height:100vh;padding-bottom:40px;}
+.app{max-width:560px;margin:0 auto;}
+
+/* header */
+header{padding:18px 16px 10px;display:flex;align-items:baseline;gap:10px;border-bottom:1px solid var(--line);}
+header h1{font-size:17px;margin:0;font-weight:700;}
+header .tag{font-family:var(--mono);font-size:11px;color:var(--teal-b);background:rgba(23,169,176,.12);padding:3px 7px;border-radius:4px;border:1px solid rgba(23,169,176,.35);}
+
+/* mode tabs */
+.modes{display:flex;gap:8px;padding:14px 16px 0;}
+.mode-btn{flex:1;padding:9px 0;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;transition:border-color .15s,color .15s;}
+.mode-btn.active{color:var(--teal-b);border-color:var(--teal);background:rgba(23,169,176,.08);}
+
+/* viewfinder */
+.viewfinder{position:relative;margin:14px 16px 0;border-radius:14px;overflow:hidden;background:#000;aspect-ratio:4/3;border:1px solid var(--line);cursor:crosshair;}
+video,.preview-img{width:100%;height:100%;object-fit:cover;display:block;}
+.frame-overlay{position:absolute;inset:0;pointer-events:none;}
+.corner{position:absolute;width:26px;height:26px;border:3px solid var(--teal-b);opacity:.85;}
+.corner.tl{top:14px;left:14px;border-right:none;border-bottom:none;border-radius:4px 0 0 0;}
+.corner.tr{top:14px;right:14px;border-left:none;border-bottom:none;border-radius:0 4px 0 0;}
+.corner.bl{bottom:14px;left:14px;border-right:none;border-top:none;border-radius:0 0 0 4px;}
+.corner.br{bottom:14px;right:14px;border-left:none;border-top:none;border-radius:0 0 4px 0;}
+.scanline{position:absolute;left:8%;right:8%;height:2px;background:linear-gradient(90deg,transparent,var(--teal-b),transparent);top:14px;opacity:0;box-shadow:0 0 8px var(--teal-b);}
+.scanning .scanline{animation:sweep 1.4s ease-in-out infinite;opacity:1;}
+@keyframes sweep{0%{top:14px;opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{top:calc(100% - 16px);opacity:0;}}
+@media(prefers-reduced-motion:reduce){.scanning .scanline{animation:none;opacity:.6;top:50%;}}
+
+/* focus ring — анимированный маркер точки фокуса */
+.focus-ring{position:absolute;width:56px;height:56px;border-radius:50%;border:2px solid var(--teal-b);box-shadow:0 0 10px rgba(63,209,216,.6);transform:translate(-50%,-50%) scale(1.5);opacity:0;pointer-events:none;transition:none;}
+.focus-ring.pop{animation:fpop .55s ease-out forwards;}
+@keyframes fpop{0%{transform:translate(-50%,-50%) scale(1.5);opacity:1;}60%{transform:translate(-50%,-50%) scale(.85);opacity:1;}100%{transform:translate(-50%,-50%) scale(.85);opacity:0;}}
+@media(prefers-reduced-motion:reduce){.focus-ring.pop{animation:none;opacity:0;}}
+
+.vf-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;text-align:center;padding:0 30px;pointer-events:none;}
+
+/* camera controls */
+.controls{display:flex;justify-content:center;align-items:center;gap:18px;padding:16px 16px 4px;}
+.shutter{width:64px;height:64px;border-radius:50%;border:3px solid var(--teal-b);background:radial-gradient(circle at 35% 30%,#1f3a44,var(--surface2));cursor:pointer;position:relative;}
+.shutter::after{content:"";position:absolute;inset:9px;border-radius:50%;background:var(--teal-b);opacity:.9;}
+.shutter:disabled{opacity:.4;cursor:not-allowed;}
+.ghost-btn{border:1px solid var(--line);background:transparent;color:var(--muted);padding:9px 14px;border-radius:8px;font-size:13px;cursor:pointer;}
+.ghost-btn.on{color:var(--teal-b);border-color:var(--teal);}
+input[type="file"]{display:none;}
+
+/* slider row — фокус и зум */
+.slider-block{padding:4px 16px 6px;display:none;flex-direction:column;gap:6px;}
+.slider-block.show{display:flex;}
+.slider-row{display:flex;align-items:center;gap:10px;}
+.slider-row span{font-size:11px;color:var(--muted);white-space:nowrap;min-width:60px;}
+.slider-row input[type=range]{flex:1;accent-color:var(--teal-b);}
+.slider-row .val{font-family:var(--mono);font-size:11px;color:var(--teal-b);min-width:36px;text-align:right;}
+
+/* info box */
+.info-box{margin:6px 16px 0;font-size:11.5px;color:var(--muted);background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;display:none;line-height:1.5;}
+.info-box.show{display:block;}
+
+.status-line{text-align:center;font-size:12.5px;color:var(--muted);padding:6px 16px 0;min-height:18px;}
+.status-line.err{color:var(--danger);}
+
+/* result card */
+.card{margin:16px 16px 0;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;}
+.result-label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;}
+.result-value{font-family:var(--mono);font-size:38px;font-weight:700;color:var(--amber);margin:4px 0 2px;}
+.result-value.flash{animation:flash .4s ease;}
+@keyframes flash{from{opacity:.25;}to{opacity:1;}}
+@media(prefers-reduced-motion:reduce){.result-value.flash{animation:none;}}
+.result-sub{font-size:12px;color:var(--muted);}
+.fields{display:flex;gap:10px;margin-top:14px;}
+.field{flex:1;}
+.field label{font-size:11px;color:var(--muted);display:block;margin-bottom:5px;}
+.field input{width:100%;background:var(--surface2);border:1px solid var(--line);color:var(--text);font-family:var(--mono);font-size:15px;padding:9px 10px;border-radius:8px;}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;}
+.chip{font-family:var(--mono);font-size:11.5px;background:var(--surface2);color:var(--teal-b);border:1px solid var(--line);border-radius:6px;padding:4px 8px;cursor:pointer;}
+.raw-text{margin-top:12px;font-family:var(--mono);font-size:11px;color:var(--muted);background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;max-height:64px;overflow:auto;white-space:pre-wrap;word-break:break-word;}
+.add-row{margin-top:14px;display:flex;gap:10px;}
+.add-row input{flex:1;background:var(--surface2);border:1px solid var(--line);color:var(--text);font-size:13px;padding:9px 10px;border-radius:8px;}
+.primary-btn{background:var(--teal);color:#03161a;border:none;font-weight:700;font-size:13px;padding:9px 16px;border-radius:8px;cursor:pointer;white-space:nowrap;}
+.primary-btn:disabled{opacity:.4;cursor:not-allowed;}
+
+/* link panel */
+.link-panel{margin:14px 16px 0;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;}
+.link-row{display:flex;gap:8px;margin-top:8px;}
+.link-row input{flex:1;background:var(--surface2);border:1px solid var(--line);color:var(--text);font-size:13px;padding:9px 10px;border-radius:8px;}
+.link-hint{font-size:11.5px;color:var(--muted);margin-top:8px;line-height:1.5;}
+.divider{display:flex;align-items:center;gap:10px;margin:14px 0 10px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em;}
+.divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line);}
+.paste-area{width:100%;min-height:90px;background:var(--surface2);border:1px solid var(--line);color:var(--text);font-size:13px;padding:10px;border-radius:8px;resize:vertical;font-family:var(--sans);}
+.link-btn-row{margin-top:10px;display:flex;justify-content:flex-end;}
+
+/* history */
+.history{margin:18px 16px 0;}
+.history h2{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center;}
+.history h2 button{background:none;border:none;color:var(--danger);font-size:11px;cursor:pointer;}
+table{width:100%;border-collapse:collapse;font-size:13px;}
+th{text-align:left;color:var(--muted);font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:0 6px 6px;}
+td{padding:9px 6px;border-top:1px solid var(--line);font-family:var(--mono);}
+tr.best td{color:var(--amber);}
+td.del{text-align:right;color:var(--muted);cursor:pointer;font-family:var(--sans);}
+.empty-hist{font-size:12.5px;color:var(--muted);padding:8px 0;}
+
+footer{margin:24px 16px 0;font-size:11.5px;color:var(--muted);line-height:1.5;border-top:1px solid var(--line);padding-top:14px;}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header>
+  <h1>₽/м²</h1>
+  <span class="tag">сканер цены за метр</span>
+</header>
+
+<div class="modes">
+  <button class="mode-btn active" id="modeCamera">📷 Камера</button>
+  <button class="mode-btn" id="modePhoto">🖼️ Фото</button>
+  <button class="mode-btn" id="modeLink">🔗 Ссылка</button>
+</div>
+
+<!-- viewfinder (скрыт в режиме ссылки) -->
+<div class="viewfinder" id="viewfinder">
+  <video id="video" autoplay playsinline muted></video>
+  <img id="previewImg" class="preview-img" style="display:none" alt="">
+  <div class="frame-overlay">
+    <div class="corner tl"></div><div class="corner tr"></div>
+    <div class="corner bl"></div><div class="corner br"></div>
+    <div class="scanline"></div>
+  </div>
+  <div class="focus-ring" id="focusRing"></div>
+  <div class="vf-empty" id="vfEmpty">Наведите камеру на площадь и цену</div>
+</div>
+<input type="file" id="fileInput" accept="image/*">
+
+<!-- кнопки камеры -->
+<div class="controls" id="cameraControls">
+  <button class="ghost-btn" id="switchBtn">⟲ Камера</button>
+  <button class="shutter" id="shutterBtn" disabled></button>
+  <button class="ghost-btn" id="torchBtn" style="display:none">🔦</button>
+</div>
+
+<!-- кнопки фото -->
+<div class="controls" id="photoControls" style="display:none">
+  <button class="ghost-btn" id="pickPhotoBtn">Выбрать фото</button>
+</div>
+
+<!-- слайдеры фокуса / зума -->
+<div class="slider-block" id="sliderBlock">
+  <div class="slider-row" id="focusRow" style="display:none">
+    <span>Фокус</span>
+    <input type="range" id="focusSlider" min="0" max="100" step="1" value="50">
+    <span class="val" id="focusVal">—</span>
+  </div>
+  <div class="slider-row" id="zoomRow" style="display:none">
+    <span>Зум</span>
+    <input type="range" id="zoomSlider" min="1" max="5" step="0.1" value="1">
+    <span class="val" id="zoomVal">1×</span>
+  </div>
+</div>
+
+<!-- информационный блок о поддержке фокуса -->
+<div class="info-box" id="infoBox"></div>
+
+<!-- ссылка / вставка -->
+<div class="link-panel" id="linkPanel" style="display:none">
+  <div class="result-label">Ссылка на объявление</div>
+  <div class="link-row">
+    <input type="url" id="linkInput" inputmode="url" placeholder="https://www.avito.ru/...">
+    <button class="primary-btn" id="linkLoadBtn">Открыть</button>
+  </div>
+  <div class="link-hint">Страница загружается через публичный CORS-прокси. Если не сработает — вставьте текст вручную.</div>
+  <div class="divider">или вставьте текст вручную</div>
+  <textarea class="paste-area" id="pasteArea" placeholder="Откройте объявление в браузере, выделите весь текст (Ctrl+A → Ctrl+C), вставьте сюда."></textarea>
+  <div class="link-btn-row">
+    <button class="primary-btn" id="pasteParseBtn">Распознать текст</button>
+  </div>
+</div>
+
+<div class="status-line" id="statusLine">Открываем камеру…</div>
+
+<div class="card">
+  <div class="result-label">Цена за 1 м²</div>
+  <div class="result-value" id="resultValue">—</div>
+  <div class="result-sub" id="resultSub">Распознайте площадь и цену, чтобы увидеть расчёт</div>
+  <div class="fields">
+    <div class="field">
+      <label for="areaInput">Площадь, м²</label>
+      <input type="text" id="areaInput" inputmode="decimal" placeholder="42.5">
+      <div class="chips" id="areaChips"></div>
+    </div>
+    <div class="field">
+      <label for="priceInput">Цена, ₽</label>
+      <input type="text" id="priceInput" inputmode="numeric" placeholder="5200000">
+      <div class="chips" id="priceChips"></div>
+    </div>
+  </div>
+  <div class="raw-text" id="rawText" style="display:none"></div>
+  <div class="add-row">
+    <input type="text" id="labelInput" placeholder="№ квартиры (необязательно)">
+    <button class="primary-btn" id="addBtn" disabled>+ В список</button>
+  </div>
+</div>
+
+<div class="history">
+  <h2>Сравнение <button id="clearAllBtn">очистить всё</button></h2>
+  <div id="historyBody"><div class="empty-hist">Список пуст</div></div>
+</div>
+
+<footer>
+  Касание по изображению в видоискателе — подсказка автофокусу (работает на Android Chrome). Слайдер фокуса появляется только если браузер и камера поддерживают ручной фокус (Chrome Android + большинство современных телефонов). Камера работает только по HTTPS.
+</footer>
+
+</div><!-- .app -->
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+/* ── элементы ── */
+const $ = id => document.getElementById(id);
+const el = {
+  modeCamera: $('modeCamera'), modePhoto: $('modePhoto'), modeLink: $('modeLink'),
+  viewfinder: $('viewfinder'), video: $('video'), previewImg: $('previewImg'), vfEmpty: $('vfEmpty'),
+  fileInput: $('fileInput'),
+  cameraControls: $('cameraControls'), photoControls: $('photoControls'),
+  shutterBtn: $('shutterBtn'), switchBtn: $('switchBtn'), torchBtn: $('torchBtn'),
+  pickPhotoBtn: $('pickPhotoBtn'),
+  sliderBlock: $('sliderBlock'),
+  focusRow: $('focusRow'), focusSlider: $('focusSlider'), focusVal: $('focusVal'),
+  zoomRow: $('zoomRow'), zoomSlider: $('zoomSlider'), zoomVal: $('zoomVal'),
+  infoBox: $('infoBox'),
+  focusRing: $('focusRing'),
+  linkPanel: $('linkPanel'), linkInput: $('linkInput'), linkLoadBtn: $('linkLoadBtn'),
+  pasteArea: $('pasteArea'), pasteParseBtn: $('pasteParseBtn'),
+  statusLine: $('statusLine'),
+  resultValue: $('resultValue'), resultSub: $('resultSub'),
+  areaInput: $('areaInput'), priceInput: $('priceInput'),
+  areaChips: $('areaChips'), priceChips: $('priceChips'),
+  rawText: $('rawText'), labelInput: $('labelInput'), addBtn: $('addBtn'),
+  historyBody: $('historyBody'), clearAllBtn: $('clearAllBtn'),
+};
+
+/* ── состояние ── */
+let stream = null;
+let videoTrack = null;
+let facingMode = 'environment';
+let torchOn = false;
+let rows = [], rowId = 0;
+
+/* ════════════════════════════════
+   РЕЖИМЫ
+════════════════════════════════ */
+function setMode(mode){
+  el.modeCamera.classList.toggle('active', mode==='camera');
+  el.modePhoto.classList.toggle('active',  mode==='photo');
+  el.modeLink.classList.toggle('active',   mode==='link');
+  el.viewfinder.style.display = mode==='link' ? 'none' : 'block';
+  el.cameraControls.style.display = mode==='camera' ? 'flex' : 'none';
+  el.photoControls.style.display  = mode==='photo'  ? 'flex' : 'none';
+  el.linkPanel.style.display      = mode==='link'   ? 'block': 'none';
+  el.video.style.display       = mode==='camera' ? 'block' : 'none';
+  el.previewImg.style.display  = mode==='photo' && el.previewImg.src ? 'block' : 'none';
+  el.sliderBlock.classList.remove('show');
+
+  if(mode==='camera'){ startCamera(); }
+  else {
+    stopCamera();
+    hideInfo();
+    if(mode==='photo'){
+      el.vfEmpty.style.display = el.previewImg.src ? 'none' : 'flex';
+      setStatus('Выберите фото с площадью и ценой');
+    } else {
+      setStatus('Вставьте ссылку или текст объявления');
+    }
+  }
+}
+el.modeCamera.addEventListener('click', ()=>setMode('camera'));
+el.modePhoto.addEventListener('click',  ()=>setMode('photo'));
+el.modeLink.addEventListener('click',   ()=>setMode('link'));
+
+/* ════════════════════════════════
+   КАМЕРА
+════════════════════════════════ */
+async function startCamera(){
+  stopCamera();
+  setStatus('Запрашиваем доступ к камере…');
+  el.shutterBtn.disabled = true;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode, width:{ideal:1920}, height:{ideal:1080} }, audio:false
+    });
+    el.video.srcObject = stream;
+    el.vfEmpty.style.display = 'none';
+    el.shutterBtn.disabled = false;
+    setStatus('Наведите камеру, при необходимости коснитесь — и нажмите кнопку');
+
+    videoTrack = stream.getVideoTracks()[0];
+    setupCameraControls(videoTrack);
+  }catch(err){
+    el.vfEmpty.style.display = 'flex';
+    el.vfEmpty.textContent = 'Нет доступа к камере';
+    setStatus('Не удалось открыть камеру. Разрешите доступ или используйте «Фото».', true);
+  }
+}
+
+function stopCamera(){
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; videoTrack=null; }
+  torchOn=false; el.torchBtn.classList.remove('on');
+}
+
+el.switchBtn.addEventListener('click', ()=>{
+  facingMode = facingMode==='environment' ? 'user' : 'environment';
+  startCamera();
+});
+
+/* ── настройка управления камерой ── */
+function setupCameraControls(track){
+  el.torchBtn.style.display = 'none';
+  el.focusRow.style.display = 'none';
+  el.zoomRow.style.display  = 'none';
+  el.sliderBlock.classList.remove('show');
+  hideInfo();
+
+  if(!track || typeof track.getCapabilities !== 'function'){
+    showInfo('Браузер не предоставляет API управления камерой. Касание по видоискателю даст подсказку автофокусу.');
+    return;
+  }
+
+  let caps = {};
+  try{ caps = track.getCapabilities(); }catch(e){}
+
+  const msgs = [];
+
+  /* фокус */
+  if(caps.focusMode && caps.focusMode.includes('manual') && caps.focusDistance){
+    const mn = caps.focusDistance.min, mx = caps.focusDistance.max;
+    el.focusSlider.min = mn; el.focusSlider.max = mx;
+    el.focusSlider.step = (mx-mn)/100;
+    el.focusSlider.value = mn + (mx-mn)*0.5; // ≈бесконечность
+    el.focusVal.textContent = fmtFocus(el.focusSlider.value, mn, mx);
+    el.focusRow.style.display = 'flex';
+    el.sliderBlock.classList.add('show');
+
+    el.focusSlider.addEventListener('input', async ()=>{
+      const v = parseFloat(el.focusSlider.value);
+      el.focusVal.textContent = fmtFocus(v, mn, mx);
+      try{ await track.applyConstraints({advanced:[{focusMode:'manual', focusDistance:v}]}); }catch(e){}
+    });
+    msgs.push('Ручной фокус: слайдер «Фокус» ниже или касание по кадру.');
+  } else {
+    msgs.push('Ручной фокус не поддерживается этой камерой. Касание по кадру — подсказка автофокусу.');
+  }
+
+  /* зум */
+  if(caps.zoom){
+    const mn = caps.zoom.min||1, mx = caps.zoom.max||5;
+    el.zoomSlider.min = mn; el.zoomSlider.max = mx; el.zoomSlider.step = (mx-mn)/50;
+    el.zoomSlider.value = mn;
+    el.zoomVal.textContent = mn.toFixed(1)+'×';
+    el.zoomRow.style.display = 'flex';
+    el.sliderBlock.classList.add('show');
+
+    el.zoomSlider.addEventListener('input', async ()=>{
+      const v = parseFloat(el.zoomSlider.value);
+      el.zoomVal.textContent = v.toFixed(1)+'×';
+      try{ await track.applyConstraints({advanced:[{zoom:v}]}); }catch(e){}
+    });
+    msgs.push('Зум: слайдер ниже.');
+  }
+
+  /* вспышка */
+  if(caps.torch){
+    el.torchBtn.style.display = 'block';
+    msgs.push('Вспышка: кнопка 🔦.');
+  }
+
+  if(msgs.length) showInfo(msgs.join(' '));
+}
+
+function fmtFocus(v, mn, mx){
+  const pct = (v-mn)/(mx-mn);
+  if(pct < 0.15) return 'макро';
+  if(pct < 0.5)  return 'средн.';
+  return '∞';
+}
+
+/* вспышка */
+el.torchBtn.addEventListener('click', async ()=>{
+  if(!videoTrack) return;
+  torchOn = !torchOn;
+  try{ await videoTrack.applyConstraints({advanced:[{torch:torchOn}]}); }catch(e){ torchOn=!torchOn; }
+  el.torchBtn.classList.toggle('on', torchOn);
+});
+
+/* ── касание по видоискателю — подсказка фокуса ── */
+el.viewfinder.addEventListener('click', async (e)=>{
+  if(!videoTrack) return;
+
+  // анимация кольца
+  const rect = el.viewfinder.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  showFocusRing(x, y);
+
+  // Пробуем pointsOfInterest (Chrome Android)
+  try{
+    const caps = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+    if(caps.pointsOfInterest){
+      // координаты нормированы 0..1
+      const px = x / rect.width;
+      const py = y / rect.height;
+      await videoTrack.applyConstraints({
+        advanced:[{ focusMode:'continuous', pointsOfInterest:[{x:px, y:py}] }]
+      });
+      return;
+    }
+    // если pointsOfInterest нет, но есть ImageCapture
+    if(typeof ImageCapture !== 'undefined'){
+      const ic = new ImageCapture(videoTrack);
+      const pc = await ic.getPhotoCapabilities().catch(()=>null);
+      if(pc){ /* просто сбрасываем на автофокус */ }
+      await videoTrack.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
+    }
+  }catch(err){}
+});
+
+function showFocusRing(x, y){
+  const r = el.focusRing;
+  r.style.left = x+'px';
+  r.style.top  = y+'px';
+  r.classList.remove('pop');
+  void r.offsetWidth; // reflow
+  r.classList.add('pop');
+}
+
+/* ── шторка ── */
+el.shutterBtn.addEventListener('click', ()=>{
+  if(!stream) return;
+  const v = el.video;
+  const c = document.createElement('canvas');
+  c.width  = v.videoWidth  || 1280;
+  c.height = v.videoHeight || 960;
+  c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+  runOcr(c.toDataURL('image/jpeg', 0.93));
+});
+
+/* ── фото из галереи ── */
+el.pickPhotoBtn.addEventListener('click', ()=>el.fileInput.click());
+el.fileInput.addEventListener('change', e=>{
+  const file = e.target.files&&e.target.files[0]; if(!file) return;
+  const fr = new FileReader();
+  fr.onload = ev=>{
+    el.previewImg.src = ev.target.result;
+    el.previewImg.style.display = 'block';
+    el.vfEmpty.style.display = 'none';
+    runOcr(ev.target.result);
+  };
+  fr.readAsDataURL(file);
+});
+
+/* ════════════════════════════════
+   OCR
+════════════════════════════════ */
+function runOcr(src){
+  el.viewfinder.classList.add('scanning');
+  setStatus('Распознаём текст…');
+  el.shutterBtn.disabled = true;
+  el.pickPhotoBtn.disabled = true;
+
+  Tesseract.recognize(src,'rus+eng',{})
+    .then(({data:{text}})=>handleText(text||''))
+    .catch(()=>setStatus('Не удалось распознать. Попробуйте снять крупнее и ровнее.', true))
+    .finally(()=>{
+      el.viewfinder.classList.remove('scanning');
+      el.shutterBtn.disabled = !stream;
+      el.pickPhotoBtn.disabled = false;
+    });
+}
+
+/* ════════════════════════════════
+   ССЫЛКА
+════════════════════════════════ */
+const PROXIES = [
+  u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u),
+  u=>'https://corsproxy.io/?url='+encodeURIComponent(u),
+  u=>'https://r.jina.ai/'+u,
+];
+
+el.linkLoadBtn.addEventListener('click', loadUrl);
+el.linkInput.addEventListener('keydown', e=>{ if(e.key==='Enter') loadUrl(); });
+el.pasteParseBtn.addEventListener('click', ()=>{
+  const t = (el.pasteArea.value||'').trim();
+  if(!t){ setStatus('Вставьте текст страницы.', true); return; }
+  setStatus('Разбираем текст…');
+  handleText(t);
+});
+
+async function loadUrl(){
+  let raw = (el.linkInput.value||'').trim();
+  if(!raw){ setStatus('Вставьте ссылку.', true); return; }
+  if(!/^https?:\/\//i.test(raw)) raw='https://'+raw;
+  let target;
+  try{ target=new URL(raw); }catch(e){ setStatus('Некорректная ссылка.', true); return; }
+  el.linkLoadBtn.disabled=true;
+  let html=null;
+  for(let i=0;i<PROXIES.length;i++){
+    setStatus(`Загружаем через прокси ${i+1}/${PROXIES.length}…`);
+    try{
+      const ctrl=new AbortController();
+      const tid=setTimeout(()=>ctrl.abort(),12000);
+      const r=await fetch(PROXIES[i](target.toString()),{signal:ctrl.signal});
+      clearTimeout(tid);
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      const txt=await r.text();
+      if(txt&&txt.length>200){ html=txt; break; }
+    }catch(e){}
+  }
+  el.linkLoadBtn.disabled=false;
+  if(!html){
+    setStatus('Не удалось загрузить страницу — сайт блокирует прокси. Скопируйте текст вручную.', true);
+    return;
+  }
+  parsePage(html);
+}
+
+function parsePage(html){
+  const isHtml=/<html[\s>]|<body[\s>]|<div[\s>]/i.test(html);
+  let plain='', jld={price:null,area:null};
+  if(isHtml){
+    let doc; try{ doc=new DOMParser().parseFromString(html,'text/html'); }catch(e){}
+    if(doc){
+      jld=extractJsonLd(doc);
+      doc.querySelectorAll('script,style,noscript').forEach(n=>n.remove());
+      plain=doc.body?doc.body.textContent:'';
+    }
+    if(!plain) plain=html.replace(/<[^>]+>/g,' ');
+  } else { plain=html; }
+  plain=plain.replace(/\s+/g,' ').trim();
+  setStatus('Готово — проверьте значения');
+  handleText(plain, jld);
+}
+
+function extractJsonLd(doc){
+  const res={price:null,area:null};
+  doc.querySelectorAll('script[type="application/ld+json"]').forEach(s=>{
+    let d; try{ d=JSON.parse(s.textContent); }catch(e){ return; }
+    (Array.isArray(d)?d:[d]).forEach(function walk(o){
+      if(!o||typeof o!=='object') return;
+      for(const k in o){
+        const v=o[k];
+        if(v&&typeof v==='object'){ walk(v); continue; }
+        const sv=String(v||'');
+        if(res.price===null&&/price/i.test(k)&&/^[\d.,\s]+$/.test(sv)){
+          const n=parseFloat(sv.replace(/[\s,]/g,''));
+          if(n>1000) res.price=n;
+        }
+        if(res.area===null&&/(floorsize|area|square)/i.test(k)){
+          const n=parseFloat(sv.replace(/[^\d.,]/g,'').replace(',','.'));
+          if(n>5&&n<2000) res.area=n;
+        }
+      }
+    });
+  });
+  return res;
+}
+
+/* ════════════════════════════════
+   ПАРСИНГ ТЕКСТА
+════════════════════════════════ */
+function handleText(text, jld){
+  el.rawText.style.display='block';
+  el.rawText.textContent=(text||'').trim().slice(0,4000)||'(пусто)';
+
+  let areas=uniq([...text.matchAll(/(\d{1,3}[.,]\d{1,2})\s*(?:кв\.?\s*)?[мМmM]/gi)].map(m=>m[1].replace(',','.')));
+  let prices=uniq([...text.matchAll(/(\d[\d\s.,]{4,14}\d)\s*(?:₽|руб|[PpБb]\b)/gi)].map(m=>m[1].replace(/[\s.,]/g,'')));
+  if(!prices.length){
+    prices=uniq([...text.matchAll(/\b(\d[\d\s]{5,13}\d)\b/g)]
+      .map(m=>m[1].replace(/\s/g,''))
+      .filter(v=>v.length>=6&&v.length<=9));
+  }
+
+  if(jld){
+    if(jld.area){ areas.unshift(jld.area.toFixed(2).replace(/\.00$/,'')); }
+    if(jld.price){ prices.unshift(String(Math.round(jld.price))); }
+  }
+
+  areas=uniq(areas); prices=uniq(prices);
+
+  if(!areas.length&&!prices.length){
+    setStatus('Не нашли ни площадь, ни цену. Попробуйте вставить текст вручную.', true);
+  } else if(!el.statusLine.classList.contains('err')){
+    setStatus('Готово — проверьте и сохраните');
+  }
+
+  renderChips(el.areaChips, areas, el.areaInput);
+  renderChips(el.priceChips, prices, el.priceInput);
+  if(areas.length)  el.areaInput.value  = areas[0];
+  if(prices.length) el.priceInput.value = prices[0];
+
+  const nm=text.match(/№\s?(\d{1,4})/);
+  if(nm&&!el.labelInput.value) el.labelInput.value=nm[1];
+
+  recompute();
+}
+
+/* ════════════════════════════════
+   РАСЧЁТ
+════════════════════════════════ */
+function recompute(){
+  const a=parseFloat((el.areaInput.value||'').replace(',','.'));
+  const p=parseFloat((el.priceInput.value||'').replace(/\s/g,''));
+  const ok=a>0&&p>0;
+  el.addBtn.disabled=!ok;
+  if(!ok){ el.resultValue.textContent='—'; el.resultSub.textContent='Распознайте площадь и цену'; return; }
+  const pm=Math.round(p/a);
+  el.resultValue.textContent=fmt(pm)+' /м²';
+  el.resultValue.classList.remove('flash');
+  requestAnimationFrame(()=>el.resultValue.classList.add('flash'));
+  el.resultSub.textContent=fmt(p)+' ₽  ÷  '+a.toFixed(2)+' м²';
+}
+el.areaInput.addEventListener('input', recompute);
+el.priceInput.addEventListener('input', recompute);
+
+/* ════════════════════════════════
+   ИСТОРИЯ
+════════════════════════════════ */
+el.addBtn.addEventListener('click', ()=>{
+  const a=parseFloat((el.areaInput.value||'').replace(',','.'));
+  const p=parseFloat((el.priceInput.value||'').replace(/\s/g,''));
+  if(!(a>0&&p>0)) return;
+  rows.push({id:++rowId, label:el.labelInput.value.trim()||'—', area:a, price:p, perM2:Math.round(p/a)});
+  el.labelInput.value='';
+  renderHistory();
+});
+
+el.clearAllBtn.addEventListener('click', ()=>{ rows=[]; renderHistory(); });
+
+function renderHistory(){
+  if(!rows.length){ el.historyBody.innerHTML='<div class="empty-hist">Список пуст</div>'; return; }
+  const sorted=[...rows].sort((a,b)=>a.perM2-b.perM2);
+  const bestId=sorted[0].id;
+  el.historyBody.innerHTML=`<table>
+    <thead><tr><th>№</th><th>м²</th><th>цена</th><th>₽/м²</th><th></th></tr></thead>
+    <tbody>${sorted.map(r=>`<tr class="${r.id===bestId?'best':''}">
+      <td>${esc(r.label)}</td><td>${r.area.toFixed(2)}</td>
+      <td>${fmt(r.price)}</td><td>${fmt(r.perM2)}</td>
+      <td class="del" data-id="${r.id}">✕</td>
+    </tr>`).join('')}</tbody></table>`;
+  el.historyBody.querySelectorAll('.del').forEach(c=>{
+    c.addEventListener('click', ()=>{ rows=rows.filter(r=>r.id!==+c.dataset.id); renderHistory(); });
+  });
+}
+
+/* ════════════════════════════════
+   УТИЛИТЫ
+════════════════════════════════ */
+function uniq(a){ return [...new Set(a)]; }
+function fmt(n){ return Math.round(n).toLocaleString('ru-RU'); }
+function esc(s){ return s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function setStatus(msg,err){
+  el.statusLine.textContent=msg;
+  el.statusLine.classList.toggle('err',!!err);
+}
+function renderChips(cont,vals,inp){
+  cont.innerHTML='';
+  vals.slice(0,4).forEach(v=>{
+    const b=document.createElement('button');
+    b.type='button'; b.className='chip'; b.textContent=v;
+    b.addEventListener('click',()=>{ inp.value=v; recompute(); });
+    cont.appendChild(b);
+  });
+}
+function showInfo(msg){ el.infoBox.textContent=msg; el.infoBox.classList.add('show'); }
+function hideInfo(){ el.infoBox.classList.remove('show'); }
+
+/* ── старт ── */
+startCamera();
+})();
+</script>
+</body>
+</html>
